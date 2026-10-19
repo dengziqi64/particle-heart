@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <title>黑洞星云心 · 16号</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      user-select: none;
+      -webkit-user-select: none;
+      overflow: hidden;
+    }
+    html, body {
+      width: 100%;
+      height: 100%;
+      background-color: #030007;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+    #viewport {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      display: block;
+      cursor: grab;
+    }
+    #viewport:active {
+      cursor: grabbing;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="viewport"></canvas>
+
+  <script>
+    (function () {
+      'use strict';
+
+      const canvas = document.getElementById('viewport');
+      const gl = canvas.getContext('webgl', {
+        antialias: true,
+        alpha: false,
+        depth: false,
+        stencil: false,
+        preserveDrawingBuffer: false,
+        powerPreference: 'high-performance'
+      });
+
+      if (!gl) {
+        document.body.innerHTML = '<h2 style="color:#fff;text-align:center;margin-top:20%;">您的浏览器不支持 WebGL</h2>';
+        return;
+      }
+
+      // 顶点着色器：标准全屏四边形
+      const vsSource = `
+        attribute vec2 a_position;
+        varying vec2 v_uv;
+        void main() {
+          v_uv = a_position * 0.5 + 0.5;
+          gl_Position = vec4(a_position, 0.0, 1.0);
+        }
+      `;
+
+      // 片元着色器：电影级黑洞引力透镜 + 爱心形态吸积盘 + 蓝紫星云 + 极向等离子体喷流
+      const fsSource = `
+        precision highp float;
+
+        varying vec2 v_uv;
+
+        uniform vec2 u_resolution;
+        uniform float u_time;
+        uniform vec2 u_mouse;
+        uniform float u_pulse;
+
+        #define PI 3.14159265359
+        #define TWO_PI 6.28318530718
+
+        // 简易哈希与伪随机
+        float hash(vec2 p) {
+          p = fract(p * vec2(123.34, 456.21));
+          p += dot(p, p + 45.32);
+          return fract(p.x * p.y);
+        }
+
+        // 2D 连续平滑噪声
+        float noise(vec2 p) {
+          vec2 i = floor(p);
+          vec2 f = fract(p);
+          vec2 u = f * f * (3.0 - 2.0 * f);
+
+          float a = hash(i);
+          float b = hash(i + vec2(1.0, 0.0));
+          float c = hash(i + vec2(0.0, 1.0));
+          float d = hash(i + vec2(1.0, 1.0));
+
+          return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+        }
+
+        // 分形布朗运动 (fBm)
+        float fbm(vec2 p) {
+          float v = 0.0;
+          float a = 0.5;
+          vec2 shift = vec2(100.0);
+          mat2 rot = mat2(cos(0.5), sin(0.5), -sin(0.5), cos(0.5));
+          for (int i = 0; i < 4; ++i) {
+            v += a * noise(p);
+            p = rot * p * 2.05 + shift;
+            a *= 0.5;
+          }
+          return v;
+        }
+
+        // 爱心极坐标特征轮廓函数 (返回该角度下的外延半径系数)
+        float heartEnvelope(float theta) {
+          // theta: -PI ~ PI, 0 对应正上方
+          float a = abs(theta);
+          float sinT = sin(theta);
+          float cosT = cos(theta);
+
+          // 经典心形曲线变形：上方双峰凹陷，下方尖角收束
+          float r = 1.0 - 0.28 * cosT + 0.38 * abs(sinT) * (sqrt(abs(cosT)) / (abs(sinT) + 1.25));
+          return r;
+        }
+
+        void main() {
+          // 归一化坐标：居中且保证 1:1 纵横比，正上方为 Y 正轴
+          vec2 st = (gl_FragCoord.xy - 0.5 * u_resolution) / min(u_resolution.x, u_resolution.y);
+
+          // 鼠标视角微仰俯倾斜
+          vec2 mouseOffset = (u_mouse - 0.5) * 0.35;
+          st -= mouseOffset * 0.15;
+
+          // 整体爱心黑洞微旋转与空间视差
+          float slowAngle = u_time * 0.015;
+          mat2 rotView = mat2(cos(slowAngle), sin(slowAngle), -sin(slowAngle), cos(slowAngle));
+          vec2 stRot = rotView * st;
+
+          float rScreen = length(st);
+          float thetaScreen = atan(st.x, st.y); // -PI ~ PI
+
+          // ==================== 1. 深空背景与背景星点 ====================
+          vec3 col = vec3(0.012, 0.003, 0.025); // 午夜极深紫暗底
+
+          // 稀疏深空星尘
+          vec2 starGrid = st * 75.0;
+          vec2 starId = floor(starGrid);
+          float starRand = hash(starId);
+          if (starRand > 0.985) {
+            float starDist = length(fract(starGrid) - 0.5);
+            float twinkle = sin(u_time * 2.5 + starRand * 20.0) * 0.5 + 0.5;
+            float starBrightness = smoothstep(0.06, 0.0, starDist) * (starRand - 0.985) * 60.0 * (0.6 + 0.4 * twinkle);
+            vec3 starCol = mix(vec3(0.7, 0.8, 1.0), vec3(1.0, 0.7, 0.95), hash(starId + 1.2));
+            col += starCol * starBrightness * smoothstep(0.18, 0.55, rScreen); // 黑洞中央不透出背景星
+          }
+
+          // 背景深邃星云云雾
+          float bgNebula = fbm(st * 2.2 + vec2(u_time * 0.01, -u_time * 0.008));
+          float bgNebula2 = fbm(st * 4.0 - vec2(u_time * 0.015, u_time * 0.012));
+          vec3 bgNebulaCol = mix(
+            vec3(0.04, 0.01, 0.08), // 暗夜紫
+            vec3(0.01, 0.03, 0.09), // 深海蓝
+            bgNebula2
+          );
+          col += bgNebulaCol * bgNebula * 0.8;
+
+          // ==================== 2. 极向等离子体喷流 (Relativistic Jets) ====================
+          // 倾斜穿越黑洞极轴的能量流
+          vec2 jetAxis = normalize(vec2(0.55, 0.83));
+          vec2 jetPerp = vec2(-jetAxis.y, jetAxis.x);
+          float jetDistAlong = dot(st, jetAxis);
+          float jetDistPerp = abs(dot(st, jetPerp));
+
+          if (abs(jetDistAlong) > 0.08) {
+            float jetWidth = 0.012 + abs(jetDistAlong) * 0.045;
+            float jetCore = smoothstep(jetWidth, 0.0, jetDistPerp);
+            float jetTurb = fbm(vec2(jetDistAlong * 8.0 - u_time * 2.2, jetDistPerp * 25.0));
+            float jetGlow = smoothstep(jetWidth * 4.0, 0.0, jetDistPerp) * 0.5;
+            
+            vec3 jetColor = mix(
+              vec3(0.4, 0.1, 0.9), // 电光紫
+              vec3(0.1, 0.8, 1.0), // 电光蓝
+              smoothstep(0.0, 0.6, abs(jetDistAlong))
+            );
+            col += (jetColor * jetCore * 1.8 + vec3(0.8, 0.3, 1.0) * jetGlow) * jetTurb * smoothstep(0.8, 0.1, abs(jetDistAlong));
+          }
+
+          // ==================== 3. 黑洞引力透镜与爱心吸积盘 ====================
+          // 黑洞史瓦西半径与光子球半径
+          float rs = 0.138;        // 事件视界半径
+          float rPhoton = rs * 1.5; // 光子球半径 ~0.207
+
+          // 引力弯曲折射：光线越贴近视界，空间弯曲越剧烈
+          float bend = rs / max(rScreen, 0.001);
+          float rBent = rScreen + (bend * bend * bend) * 0.28;
+
+          // 3D 倾角投影（模拟 35 度俯视吸积盘）
+          float tiltCos = cos(0.58);
+          float tiltSin = sin(0.58);
+          vec2 diskCoord = vec2(st.x, (st.y + 0.035) / tiltCos); // 展平为吸积盘平面
+          float rDisk = length(diskCoord);
+          float thetaDisk = atan(diskCoord.x, -diskCoord.y); // 角度归一化，正上方为心尖/凹陷
+
+          // 计算心形边界函数
+          float heartR = heartEnvelope(thetaDisk) * 0.44;
+
+          // 吸积盘归一化径向坐标 (从内边界到心形外围边缘)
+          float diskInner = rs * 1.08;
+          float diskOuter = heartR * (1.0 + 0.15 * u_pulse); // 伴随心跳脉冲微弱呼吸扩展
+          float uDisk = (rDisk - diskInner) / max(diskOuter - diskInner, 0.001);
+
+          // 差动自转旋转角速度 (开普勒自转：内圈高速飞旋，外圈平缓流动)
+          float omega = 0.85 / (pow(max(rDisk, 0.08), 1.25) + 0.1);
+          float spiralAngle = thetaDisk - u_time * omega * 0.45;
+
+          // 盘面多层星云与等离子体能量条带
+          vec2 spiralUV = vec2(cos(spiralAngle), sin(spiralAngle)) * rDisk * 5.0;
+          float diskNoise1 = fbm(spiralUV + vec2(u_time * 0.2, -u_time * 0.15));
+          float diskNoise2 = fbm(spiralUV * 2.2 - vec2(u_time * 0.35, u_time * 0.1));
+          float plasma = mix(diskNoise1, diskNoise2, 0.45);
+
+          // 盘体密度剖面：内圈明亮，中间形成厚实质感，外沿呈丝状雾气
+          float diskDensity = smoothstep(0.0, 0.12, uDisk) * smoothstep(1.0, 0.25, uDisk);
+          diskDensity *= (0.45 + 0.55 * plasma);
+
+          // 前景与背景三维遮挡：盘面在视界前方 (Y > -0.02) 与视界后方通过透镜弯曲显现
+          float isForeground = smoothstep(-0.04, 0.04, st.y);
+
+          // 空间引力透镜弯曲光环 (Einstein Ring & 上方被引力吊起的后背吸积盘弧线)
+          float lensingArcDist = abs(rScreen - rPhoton * 1.12);
+          float lensingArc = smoothstep(0.04, 0.0, lensingArcDist) * (1.0 - smoothstep(0.0, 0.15, st.y));
+          lensingArc *= (0.6 + 0.4 * fbm(vec2(thetaScreen * 4.0, u_time * 0.5)));
+
+          // 光子球极亮纯净细线 (Photon Ring)
+          float photonRing = smoothstep(0.008, 0.0, abs(rScreen - rPhoton)) * (1.0 + 0.5 * u_pulse);
+
+          // 吸积盘多层次电影级调色板
+          // 内沿白炽电光蓝 -> 中层极光紫/洋红 -> 外沿深空靛蓝与玫瑰云雾
+          vec3 colInner = vec3(0.85, 0.95, 1.0);  // 白热电光
+          vec3 colElectricCyan = vec3(0.0, 0.88, 1.0); // 耀眼电蓝
+          vec3 colMagenta = vec3(0.95, 0.12, 0.72); // 洋红能量流
+          vec3 colAuroraPurple = vec3(0.55, 0.18, 0.92); // 极光紫
+          vec3 colDeepIndigo = vec3(0.12, 0.08, 0.38); // 深海靛青
+
+          vec3 diskColor = mix(colElectricCyan, colMagenta, smoothstep(0.05, 0.45, uDisk));
+          diskColor = mix(diskColor, colAuroraPurple, smoothstep(0.35, 0.75, uDisk));
+          diskColor = mix(diskColor, colDeepIndigo, smoothstep(0.7, 1.1, uDisk));
+          diskColor = mix(colInner, diskColor, smoothstep(0.0, 0.08, uDisk));
+
+          // 能量脉冲驱动整体亮度呼吸
+          float pulseIntensity = 1.0 + 0.32 * u_pulse;
+
+          // 合成吸积盘进入画面
+          vec3 accretionCol = diskColor * diskDensity * 2.8 * pulseIntensity;
+
+          // 透镜光环上色（极光紫与洋红环绕）
+          vec3 lensCol = mix(vec3(0.1, 0.8, 1.0), vec3(1.0, 0.25, 0.85), 0.5 + 0.5 * sin(thetaScreen + u_time));
+          accretionCol += lensCol * lensingArc * 1.6 * pulseIntensity;
+
+          // 光子圈白炽光辉
+          accretionCol += vec3(0.92, 0.96, 1.0) * photonRing * 3.5;
+
+          // 叠加吸积盘与星云
+          col += accretionCol;
+
+          // ==================== 4. 爱心外层星云气浪与流动丝带 ====================
+          // 沿着心形边缘舒展的游离能量流
+          float heartOuterDist = abs(rDisk - heartR);
+          float heartFilament = smoothstep(0.08, 0.0, heartOuterDist);
+          float filamentNoise = fbm(vec2(thetaDisk * 3.0 + u_time * 0.12, rDisk * 6.0));
+          vec3 filamentCol = mix(vec3(0.2, 0.4, 1.0), vec3(0.85, 0.15, 0.65), sin(thetaDisk * 2.0) * 0.5 + 0.5);
+          col += filamentCol * heartFilament * filamentNoise * 0.85 * pulseIntensity;
+
+          // ==================== 5. 绝对黑色引力暗核 (Event Horizon) ====================
+          // 任何进入史瓦西半径内的光线被引力吞噬，形成无底深渊
+          float shadowCore = smoothstep(rs, rs - 0.012, rScreen);
+          
+          // 前部盘面会微微越过视界前边缘产生立体环绕感
+          float foregroundOcclusion = smoothstep(-0.02, 0.08, diskCoord.y) * diskDensity;
+          col = mix(col, vec3(0.0), shadowCore * (1.0 - foregroundOcclusion * 0.65));
+
+          // 视界边缘微弱色散引力红移
+          float redshift = smoothstep(rs * 1.15, rs, rScreen) * (1.0 - shadowCore);
+          col = mix(col, vec3(0.25, 0.02, 0.08), redshift * 0.4);
+
+          // ==================== 6. 电影级色调映射 (ACES Filmic Tone Mapping) ====================
+          // 避免过曝溢出，压制极端纯白，保持深邃暗部与通透高光
+          vec3 x = max(vec3(0.0), col);
+          vec3 toneMapped = (x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14);
+
+          // 优雅暗角：让屏幕四周自然隐没于午夜黑
+          float vignette = smoothstep(1.25, 0.45, length(st));
+          toneMapped *= vignette;
+
+          gl_FragColor = vec4(toneMapped, 1.0);
+        }
+      `;
+
+      // 编译着色器
+      function createShader(gl, type, source) {
+        const shader = gl.createShader(type);
+        gl.shaderSource(shader, source);
+        gl.compileShader(shader);
+        if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+          console.error(gl.getShaderInfoLog(shader));
+          gl.deleteShader(shader);
+          return null;
+        }
+        return shader;
+      }
+
+      const vs = createShader(gl, gl.VERTEX_SHADER, vsSource);
+      const fs = createShader(gl, gl.FRAGMENT_SHADER, fsSource);
+      const program = gl.createProgram();
+      gl.attachShader(program, vs);
+      gl.attachShader(program, fs);
+      gl.linkProgram(program);
+
+      if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+        console.error(gl.getProgramInfoLog(program));
+        return;
+      }
+
+      gl.useProgram(program);
+
+      // 全屏四边形顶点数据
+      const posBuffer = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, posBuffer);
+      gl.bufferData(
+        gl.ARRAY_BUFFER,
+        new Float32Array([
+          -1.0, -1.0,
+           1.0, -1.0,
+          -1.0,  1.0,
+          -1.0,  1.0,
+           1.0, -1.0,
+           1.0,  1.0,
+        ]),
+        gl.STATIC_DRAW
+      );
+
+      const aPosition = gl.getAttribLocation(program, 'a_position');
+      gl.enableVertexAttribArray(aPosition);
+      gl.vertexAttribPointer(aPosition, 2, gl.FLOAT, false, 0, 0);
+
+      // Uniform 位置缓存
+      const uResLoc = gl.getUniformLocation(program, 'u_resolution');
+      const uTimeLoc = gl.getUniformLocation(program, 'u_time');
+      const uMouseLoc = gl.getUniformLocation(program, 'u_mouse');
+      const uPulseLoc = gl.getUniformLocation(program, 'u_pulse');
+
+      // 视口与分辨率自适应
+      let width = 0;
+      let height = 0;
+      function resize() {
+        const dpr = Math.min(window.devicePixelRatio || 1, 2.0); // 限制 DPR<=2 保证 60fps
+        width = Math.floor(window.innerWidth * dpr);
+        height = Math.floor(window.innerHeight * dpr);
+        if (canvas.width !== width || canvas.height !== height) {
+          canvas.width = width;
+          canvas.height = height;
+          gl.viewport(0, 0, width, height);
+        }
+      }
+      window.addEventListener('resize', resize, { passive: true });
+      resize();
+
+      // 交互逻辑：平滑视线跟随
+      let targetMouseX = 0.5;
+      let targetMouseY = 0.5;
+      let curMouseX = 0.5;
+      let curMouseY = 0.5;
+
+      window.addEventListener('mousemove', (e) => {
+        targetMouseX = e.clientX / window.innerWidth;
+        targetMouseY = 1.0 - (e.clientY / window.innerHeight);
+      }, { passive: true });
+
+      window.addEventListener('touchmove', (e) => {
+        if (e.touches.length > 0) {
+          targetMouseX = e.touches[0].clientX / window.innerWidth;
+          targetMouseY = 1.0 - (e.touches[0].clientY / window.innerHeight);
+        }
+      }, { passive: true });
+
+      // 心跳与宇宙能量呼吸周期 (周期约 8.2 秒，平稳自然)
+      function getPulse(t) {
+        const cycle = (t % 8.2) / 8.2;
+        // 呼吸能量波峰波谷
+        if (cycle < 0.28) {
+          const p = cycle / 0.28;
+          return Math.sin(p * Math.PI) * Math.exp(-p * 1.5);
+        }
+        return 0.0;
+      }
+
+      // 渲染主循环
+      const startTime = performance.now();
+      function render(now) {
+        requestAnimationFrame(render);
+
+        const elapsed = (now - startTime) * 0.001;
+
+        // 缓动平滑鼠标视角
+        curMouseX += (targetMouseX - curMouseX) * 0.04;
+        curMouseY += (targetMouseY - curMouseY) * 0.04;
+
+        const pulse = getPulse(elapsed);
+
+        gl.uniform2f(uResLoc, canvas.width, canvas.height);
+        gl.uniform1f(uTimeLoc, elapsed);
+        gl.uniform2f(uMouseLoc, curMouseX, curMouseY);
+        gl.uniform1f(uPulseLoc, pulse);
+
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
+      }
+
+      requestAnimationFrame(render);
+    })();
+  </script>
+</body>
+</html>
