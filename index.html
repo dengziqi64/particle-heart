@@ -16,7 +16,7 @@
     html, body {
       width: 100%;
       height: 100%;
-      background-color: #010006;
+      background-color: #020107;
       display: flex;
       justify-content: center;
       align-items: center;
@@ -28,6 +28,7 @@
       width: 100%;
       height: 100%;
       display: block;
+      z-index: 1;
     }
     #particleOverlay {
       position: absolute;
@@ -36,6 +37,7 @@
       width: 100%;
       height: 100%;
       display: block;
+      z-index: 2;
       pointer-events: none;
       mix-blend-mode: screen;
     }
@@ -74,13 +76,12 @@
         }
       `;
 
-      // 片元着色器：专为 1:1 还原参考图打造的高拟真黑洞星云心
-      // 核心特征：
-      // 1. 各向异性速度场拉丝 (Anisotropic Streaks) - 彻底告别廉价 Perlin 噪波，呈现高精丝绸与光纤流光
-      // 2. 纯黑心形引力深渊 + 3D 纵深内壁倒角
-      // 3. 左电光冰蓝 / 右炽热洋红的双相光子环与耀斑高光
-      // 4. 暗星云吸收裂隙 (Dark Dust Filaments) 产生电影级对比度与体积厚重感
-      // 5. 浮游陨石晶屑的锐利边缘受光
+      // 片元着色器：电影级 16 号黑洞星云心
+      // 修复重点：
+      // 1. 彻底移除 atan 奇点与横向拼接接缝，采用连续 2D 矩阵旋涡流场 (Swirl Matrix)
+      // 2. 移除粗暴白边描边，重塑为细腻银蓝引力透镜光环 (Silver-Blue Lensing Arc)
+      // 3. 内部黑洞核心注入次级内层透镜光弧与深空引力井空间纵深
+      // 4. 多层弯曲吸积盘 (远景深蓝、中景极光紫、前景细薄洋红) 与平滑色调映射，杜绝过曝糊片
       const fsSource = `
         precision highp float;
 
@@ -91,7 +92,7 @@
 
         #define PI 3.14159265358979323846
 
-        // 极速高质量伪随机
+        // 快速平滑伪随机
         float hash(vec2 p) {
           p = fract(p * vec2(123.34, 456.21));
           p += dot(p, p + 45.32);
@@ -112,20 +113,29 @@
           return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
         }
 
-        // 流线型拉丝分形 (Flow Streaks)
-        // 在切向拉伸 10~30 倍，产生真实的宇宙等离子体纤维
-        float flowStreak(vec2 p, float stretch) {
-          p.y *= stretch;
+        // 分形布朗运动 (fBm)
+        float fbm(vec2 p) {
           float v = 0.0;
-          v += 0.500 * noise(p); p *= 2.02;
-          v += 0.250 * noise(p); p *= 2.04;
-          v += 0.125 * noise(p); p *= 2.03;
-          v += 0.062 * noise(p);
+          float a = 0.5;
+          mat2 rot = mat2(cos(0.52), sin(0.52), -sin(0.52), cos(0.52));
+          for (int i = 0; i < 4; ++i) {
+            v += a * noise(p);
+            p = rot * p * 2.05 + vec2(7.3, 11.1);
+            a *= 0.5;
+          }
           return v;
         }
 
+        // 无缝连续旋转矩阵：基于半径实现平滑引力旋涡，完全杜绝 atan 分支跳跃导致的接缝断层
+        vec2 swirl(vec2 p, float strength, float timeOffset) {
+          float r = length(p);
+          float angle = timeOffset + strength / (pow(r, 0.62) + 0.16);
+          float c = cos(angle);
+          float s = sin(angle);
+          return vec2(c * p.x - s * p.y, s * p.x + c * p.y);
+        }
+
         // 完美连续平滑心形符号距离场 (Smooth Analytic Heart SDF)
-        // 具有饱满的上双圆叶、顶部落差 cleft 以及尖锐优美的下底尖
         float sdHeart(vec2 p, float s) {
           p /= s;
           p.y += 0.20; // 视觉重心优化
@@ -145,191 +155,163 @@
           float h = clamp(dot(pt, edge) / dot(edge, edge), 0.0, 1.0);
           float distLine = length(pt - edge * h);
 
-          // 内部符号修正
+          // 内部符号
           float sideSign = sign(p.x * edge.y - pt.y * edge.x);
           return distLine * sideSign * s;
         }
 
-        // 浮游暗石与陨石碎片 (Asteroid Rocks)
-        vec4 renderRocks(vec2 p, float t) {
-          vec2 grid = p * 14.0;
-          vec2 id = floor(grid);
-          vec2 f = fract(grid);
-
-          float minD = 1.0;
-          vec2 minDiff = vec2(0.0);
-          float rockId = 0.0;
-
-          for (int y = -1; y <= 1; y++) {
-            for (int x = -1; x <= 1; x++) {
-              vec2 n = vec2(float(x), float(y));
-              vec2 pt = vec2(hash(id + n), hash(id + n + 41.2));
-              // 随引力微幅漂移
-              pt = 0.5 + 0.35 * sin(t * 0.7 + 6.2831 * pt);
-              vec2 diff = n + pt - f;
-              float d = length(diff);
-              if (d < minD) {
-                minD = d;
-                minDiff = diff;
-                rockId = hash(id + n + 89.1);
-              }
-            }
-          }
-
-          if (rockId > 0.65) {
-            float radius = (rockId - 0.65) * 0.65;
-            float rockShape = smoothstep(radius, radius * 0.45, minD);
-
-            // 碎石双色立体受光：左侧受电蓝光照，右侧受洋红边缘光勾勒
-            vec2 norm = normalize(minDiff);
-            float cyanEdge = clamp(dot(norm, vec2(-0.85, 0.5)), 0.0, 1.0);
-            float pinkEdge = clamp(dot(norm, vec2(0.85, -0.5)), 0.0, 1.0);
-
-            vec3 col = vec3(0.02, 0.01, 0.03); // 剪影石体
-            col += vec3(0.15, 0.75, 1.0) * pow(cyanEdge, 2.5) * 2.8;
-            col += vec3(1.0, 0.25, 0.75) * pow(pinkEdge, 2.5) * 3.5;
-
-            return vec4(col, rockShape);
-          }
-          return vec4(0.0);
+        // 电影级 ACES Filmic 色调映射（严格压制极端过曝，高光通透、暗部深邃有细节）
+        vec3 acesFilm(vec3 x) {
+          float a = 2.51;
+          float b = 0.03;
+          float c = 2.43;
+          float d = 0.59;
+          float e = 0.14;
+          return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
         }
 
         void main() {
-          // 视口正交居中坐标
+          // 视口长宽比归一化坐标系（中心为原点）
           vec2 st = (gl_FragCoord.xy - 0.5 * u_resolution) / min(u_resolution.x, u_resolution.y);
 
           // 鼠标平滑微倾视角
-          vec2 mouseDir = (u_mouse - 0.5) * 0.35;
-          st -= mouseDir * 0.10;
+          vec2 mouseDir = (u_mouse - 0.5) * 0.30;
+          st -= mouseDir * 0.08;
 
-          // 整体爱心倾角 (-7 度，还原参考图动势)
-          float baseAngle = -0.12;
+          // 整体爱心倾角 (-6度，呼应动态张力)
+          float baseAngle = -0.10;
           mat2 rotView = mat2(cos(baseAngle), sin(baseAngle), -sin(baseAngle), cos(baseAngle));
           vec2 pRot = rotView * st;
 
           float r = length(pRot);
-          float theta = atan(pRot.y, pRot.x);
 
-          // ==================== 1. 深空午夜背景与闪烁微星 ====================
-          vec3 col = vec3(0.005, 0.002, 0.012);
+          // ==================== 1. 深邃午夜宇宙背景与远景微星 ====================
+          vec3 col = vec3(0.006, 0.003, 0.015); // 午夜靛蓝暗底
 
-          // 远景微尘星光
-          vec2 starGrid = st * 70.0;
+          // 背景微细星点（分层闪烁）
+          vec2 starGrid = st * 65.0;
           vec2 starId = floor(starGrid);
           float starH = hash(starId);
-          if (starH > 0.983) {
+          if (starH > 0.985) {
             float sDist = length(fract(starGrid) - 0.5);
-            float twinkle = sin(u_time * 2.5 + starH * 40.0) * 0.5 + 0.5;
-            float bright = smoothstep(0.07, 0.0, sDist) * (starH - 0.983) * 90.0 * (0.6 + 0.4 * twinkle);
-            vec3 starCol = mix(vec3(0.7, 0.85, 1.0), vec3(1.0, 0.6, 0.95), hash(starId + 5.0));
-            col += starCol * bright;
+            float twinkle = sin(u_time * 2.2 + starH * 35.0) * 0.5 + 0.5;
+            float sBright = smoothstep(0.065, 0.0, sDist) * (starH - 0.985) * 75.0 * (0.6 + 0.4 * twinkle);
+            vec3 sCol = mix(vec3(0.65, 0.8, 1.0), vec3(0.95, 0.7, 0.9), hash(starId + 3.0));
+            col += sCol * sBright;
           }
 
-          // 参考图左侧标志性 4-Point 十字衍射主星
-          vec2 brightStarPos = vec2(-0.46, 0.14);
+          // 左侧标志性 4-Point 十字衍射主星
+          vec2 brightStarPos = vec2(-0.45, 0.12);
           float distBS = length(st - brightStarPos);
-          if (distBS < 0.22) {
-            float coreBS = smoothstep(0.012, 0.0, distBS) * 3.2;
-            float glowBS = smoothstep(0.18, 0.0, distBS) * 0.45;
+          if (distBS < 0.20) {
+            float coreBS = smoothstep(0.010, 0.0, distBS) * 2.0;
+            float glowBS = smoothstep(0.16, 0.0, distBS) * 0.35;
             vec2 diffP = abs(st - brightStarPos);
-            float spikes = (smoothstep(0.003, 0.0, diffP.x) * smoothstep(0.12, 0.0, diffP.y) +
-                            smoothstep(0.003, 0.0, diffP.y) * smoothstep(0.12, 0.0, diffP.x)) * 0.9;
-            col += vec3(0.8, 0.7, 1.0) * (coreBS + glowBS) + vec3(0.95, 0.85, 1.0) * spikes;
+            float spikes = (smoothstep(0.003, 0.0, diffP.x) * smoothstep(0.10, 0.0, diffP.y) +
+                            smoothstep(0.003, 0.0, diffP.y) * smoothstep(0.10, 0.0, diffP.x)) * 0.75;
+            col += vec3(0.7, 0.75, 1.0) * (coreBS + glowBS) + vec3(0.85, 0.85, 1.0) * spikes;
           }
 
-          // ==================== 2. 心形黑洞引力深渊 (Heart Event Horizon) ====================
-          float heartScale = 0.355 * (1.0 + 0.018 * u_pulse);
+          // ==================== 2. 心形黑洞引力场与尺度 ====================
+          // 爱心占画面高度约 65%，伴随极缓慢舒缓的呼吸脉冲微涨落
+          float heartScale = 0.355 * (1.0 + 0.012 * u_pulse);
           float d = sdHeart(pRot, heartScale);
 
-          // 左右分相偏置 (-1.0 左侧冰蓝, +1.0 右侧炽粉)
-          float lrSide = clamp(pRot.x * 3.8, -1.0, 1.0);
+          // 左右分相偏置（左电光冰蓝，右温润极光紫与洋红）
+          float lrSide = clamp(pRot.x * 3.2, -1.0, 1.0);
 
-          // ==================== 3. 极速吸积引力漩涡 (High-Velocity Accretion Vortex) ====================
-          // 开普勒切向漩涡公式：靠近黑洞角速度几何级剧增
-          float vortexSpin = 3.2 / (pow(max(r, 0.08), 0.72) + 0.12);
-          float spiralTheta = theta - vortexSpin + u_time * 0.42;
+          // ==================== 3. 无缝多层弯曲吸积盘 (Continuous Multi-Layer Disk) ====================
+          // 完全杜绝 atan 切割，使用连续 swirl 空间映射
 
-          // 沿对数螺旋展开的各向异性流光坐标系
-          vec2 streamCoord = vec2(spiralTheta * 2.5, (r + max(d, 0.0) * 0.8) * 8.0);
+          // 【远景底层】：宽厚柔和的深海蓝与靛青流体
+          vec2 swFar = swirl(pRot, 2.0, u_time * 0.12);
+          float farNebula = fbm(swFar * 2.8 + vec2(u_time * 0.06, -u_time * 0.04));
+          float farMask = smoothstep(0.02, 0.18, d) * smoothstep(1.1, 0.25, d);
+          vec3 colFar = mix(vec3(0.03, 0.06, 0.22), vec3(0.12, 0.04, 0.20), farNebula);
+          col += colFar * farMask * 1.3;
 
-          // 核心拉丝条带：极高纵横比生成纤细丝绸等离子流
-          float streak1 = flowStreak(streamCoord + vec2(u_time * 0.3, 0.0), 3.5);
-          float streak2 = flowStreak(streamCoord * 1.8 - vec2(u_time * 0.5, u_time * 0.1), 4.2);
-          float plasma = mix(streak1, streak2, 0.45);
+          // 【中景主体】：引力加速流动等离子带与暗星云裂纹
+          vec2 swMid = swirl(pRot, 3.4, u_time * 0.25);
+          float midGas1 = fbm(swMid * 4.2 + vec2(u_time * 0.15, 0.0));
+          float midGas2 = fbm(swMid * 7.5 - vec2(0.0, u_time * 0.12));
+          float midPlasma = mix(midGas1, midGas2, 0.45);
 
-          // 宇宙暗星云吸收带 (Dark Dust Veins)：切割高光，形成极强的层次和神秘体积
-          float darkVeins = smoothstep(0.15, 0.65, flowStreak(streamCoord * 0.8 + vec2(u_time * 0.15, 0.0), 2.2));
-          plasma *= (0.35 + 0.65 * darkVeins);
+          // 暗星云吸收裂痕 (Dark Dust Lanes)：提供真实的宇宙光影层次与厚度
+          float darkLanes = smoothstep(0.22, 0.70, fbm(swMid * 3.0 + vec2(u_time * 0.08, 1.2)));
+          midPlasma *= (0.4 + 0.6 * darkLanes);
 
-          // 吸积盘沿心形外围的密度分布
-          float accretionMask = smoothstep(-0.02, 0.06, d) * smoothstep(0.95, 0.08, d);
-          float accretionIntensity = accretionMask * plasma * 2.8;
+          float midMask = smoothstep(0.005, 0.08, d) * smoothstep(0.85, 0.10, d);
 
-          // 调色盘分相调制：
-          // 左侧：深海青 -> 冰电蓝 -> 极光紫
-          // 右侧：暗玫红 -> 炽烈洋红 -> 荧光粉白
-          vec3 colElectricBlue = vec3(0.0, 0.82, 1.0);
-          vec3 colAuroraPurple = vec3(0.58, 0.12, 0.96);
-          vec3 colNeonMagenta  = vec3(1.0, 0.10, 0.68);
-          vec3 colDeepIndigo   = vec3(0.08, 0.04, 0.32);
+          // 中景丰富分层色彩调制（控制洋红饱和度，杜绝过曝）
+          vec3 colIceBlue     = vec3(0.08, 0.65, 0.95);  // 左翼深海冰蓝
+          vec3 colAuroraViolet = vec3(0.52, 0.18, 0.88);  // 中央极光紫
+          vec3 colSoftRose     = vec3(0.88, 0.22, 0.62);  // 右翼玫瑰洋红（克制温润）
+          vec3 colDeepIndigo   = vec3(0.06, 0.03, 0.26);  // 底层深空靛蓝
 
-          vec3 vortexCol = mix(colElectricBlue, colNeonMagenta, smoothstep(-0.35, 0.35, lrSide));
-          vortexCol = mix(vortexCol, colAuroraPurple, 0.38);
-          vortexCol = mix(colDeepIndigo, vortexCol, smoothstep(0.15, 0.85, plasma));
+          vec3 midColor = mix(colIceBlue, colSoftRose, smoothstep(-0.35, 0.35, lrSide));
+          midColor = mix(midColor, colAuroraViolet, 0.35);
+          midColor = mix(colDeepIndigo, midColor, smoothstep(0.1, 0.8, midPlasma));
 
-          col += vortexCol * accretionIntensity * (1.0 + 0.28 * u_pulse);
+          col += midColor * midMask * midPlasma * 2.1 * (1.0 + 0.20 * u_pulse);
 
-          // ==================== 4. 环形极光能量丝带 (Auroral Silk Ribbons) ====================
-          // 紧密包裹心形边缘的丝带流
-          float ribbon1 = smoothstep(0.05, 0.0, abs(d - 0.035)) * (0.5 + 0.5 * sin(spiralTheta * 3.5 + u_time * 1.8));
-          float ribbon2 = smoothstep(0.08, 0.0, abs(d - 0.14))  * (0.5 + 0.5 * cos(spiralTheta * 2.5 - u_time * 1.4));
+          // 【前景流光】：贴近心形边缘的高速细薄等离子光丝
+          vec2 swClose = swirl(pRot, 4.6, u_time * 0.38);
+          float closeSilk = fbm(swClose * 9.0 + vec2(u_time * 0.22, -u_time * 0.18));
+          float closeMask = smoothstep(0.015, 0.055, d) * smoothstep(0.35, 0.08, d);
+          vec3 closeCol = mix(vec3(0.2, 0.8, 1.0), vec3(1.0, 0.35, 0.75), smoothstep(-0.25, 0.25, lrSide));
+          col += closeCol * closeMask * closeSilk * 1.2;
 
-          vec3 ribCol1 = mix(vec3(0.1, 0.85, 1.0), vec3(1.0, 0.2, 0.8), smoothstep(-0.2, 0.2, lrSide));
-          vec3 ribCol2 = mix(vec3(0.9, 0.15, 0.85), vec3(0.2, 0.6, 1.0), smoothstep(-0.2, 0.2, lrSide));
+          // ==================== 4. 细腻银蓝引力透镜光环 (Silver-Blue Lensing Arc) ====================
+          // 彻底告别粗白描边，采用光子折射连续辉光与微波折射
+          // 边缘折射光环：随距离呈物理级指数双曲衰减 (Hyperbolic / Exponential falloff)
+          float arcGlow1 = exp(-abs(d) * 45.0) * 0.65;
+          float arcGlow2 = exp(-abs(d) * 140.0) * 0.70;
+          float lensRing = (arcGlow1 + arcGlow2) * (1.0 + 0.25 * u_pulse);
 
-          col += ribCol1 * ribbon1 * 2.4 * streak1;
-          col += ribCol2 * ribbon2 * 1.5 * streak2;
+          // 局部高光与折射起伏（顶部落差 cleft 与下尖处自然聚集，两侧柔和延伸）
+          float cleftFocal = smoothstep(0.15, 0.45, pRot.y) * smoothstep(0.25, 0.0, abs(pRot.x)) * 0.85;
+          float tipFocal   = smoothstep(-0.25, -0.65, pRot.y) * 0.65;
+          float rimVariations = 0.85 + 0.15 * sin(pRot.y * 18.0 + u_time * 1.5) + cleftFocal + tipFocal;
 
-          // ==================== 5. 浮游星际碎石与陨石环带 (Asteroid Debris) ====================
-          // 碎石在引力风暴中回旋飞掠，带有立体冷暖边缘反光
-          vec2 debrisCoord = vec2(cos(spiralTheta * 0.85), sin(spiralTheta * 0.85)) * (r + 0.12);
-          vec4 rocks = renderRocks(debrisCoord, u_time);
-          float rockZone = smoothstep(0.015, 0.08, d) * smoothstep(0.85, 0.22, d);
-          col = mix(col, col + rocks.rgb, rocks.a * rockZone);
+          // 银蓝主调光环调色（高贵优雅、细腻通透）
+          vec3 silverCore  = vec3(0.82, 0.92, 1.0);  // 银白微蓝光心
+          vec3 silverAzure = vec3(0.28, 0.68, 0.98); // 冰蓝折射晕
+          vec3 silverViolet= vec3(0.68, 0.35, 0.92); // 外围极光紫晕
+          vec3 silverRose  = vec3(0.92, 0.38, 0.70); // 右侧微量暖辉光
 
-          // ==================== 6. 光子环与超亮耀斑 (Photon Ring & Hyper Flares) ====================
-          // 贴紧心形内边缘的光子环（极高能量密度，白炽带彩）
-          float photonThickness = 0.012;
-          float photonRing = smoothstep(photonThickness, 0.0, abs(d)) * (1.0 + 0.45 * u_pulse);
+          vec3 ringTint = mix(silverAzure, silverRose, smoothstep(-0.2, 0.2, lrSide));
+          ringTint = mix(silverCore, ringTint, 0.55);
+          ringTint = mix(ringTint, silverViolet, smoothstep(0.0, 0.05, abs(d)));
 
-          vec3 photonLeft  = vec3(0.90, 0.96, 1.0); // 冰蓝白炽
-          vec3 photonRight = vec3(1.0, 0.70, 0.95); // 炽粉白炽
-          vec3 photonCol = mix(photonLeft, photonRight, smoothstep(-0.2, 0.2, lrSide));
+          col += ringTint * lensRing * rimVariations * 1.75;
 
-          // 参考图右侧肩部与下尖角处的剧烈耀斑高光
-          float rightShoulderFlare = smoothstep(0.15, 0.55, lrSide) * smoothstep(0.035, 0.0, abs(d)) * 2.6;
-          float bottomTipFlare     = smoothstep(-0.25, -0.65, pRot.y) * smoothstep(0.025, 0.0, abs(d)) * 2.2;
-
-          col += photonCol * photonRing * 3.8;
-          col += vec3(1.0, 0.85, 0.98) * (rightShoulderFlare + bottomTipFlare);
-
-          // ==================== 7. 心形绝对引力深渊 (Black Hole Event Horizon) ====================
-          // 跌入黑洞视界：深度黑化，内壁保留微弱靛紫深渊折射
+          // ==================== 5. 优化黑洞核心空间纵深 (Deep Void & Secondary Lensing) ====================
+          // 保留深邃黑暗，同时注入次级引力光弧与 3D 引力井深度，避免扁平贴片感
           if (d < 0.0) {
-            float innerFalloff = smoothstep(0.0, -0.05, d);
-            col = mix(col, vec3(0.0), innerFalloff);
+            // 内层黑洞纵深衰减：越往核心越接近绝对虚空
+            float innerFalloff = smoothstep(0.0, -0.065, d);
+
+            // 视界内缘微弱的次级引力弯曲折射光弧 (Secondary Einstein Arc)
+            float innerArcDist = abs(d + 0.032);
+            float innerArc = exp(-innerArcDist * 75.0) * 0.18;
+            vec3 innerArcCol = mix(vec3(0.12, 0.25, 0.55), vec3(0.35, 0.15, 0.45), smoothstep(-0.2, 0.2, lrSide));
+
+            // 引力井深层靛蓝余晕
+            vec3 deepSpaceVoid = mix(vec3(0.008, 0.005, 0.022), vec3(0.001, 0.0005, 0.003), smoothstep(0.0, -0.15, d));
+
+            // 平滑混合内部纵深
+            col = mix(col, deepSpaceVoid + innerArcCol * innerArc, innerFalloff);
           }
 
-          // ==================== 8. 电影级 ACES Filmic 色调映射与深邃暗角 ====================
-          // 压制极端过曝，高光通透、暗部深邃有细节
-          vec3 x = max(vec3(0.0), col);
-          vec3 mapped = (x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14);
+          // ==================== 6. 电影级色彩管理与环境暗角 ====================
+          // 运用 ACES Filmic 曲线压制高光，保证暗部有层次、亮部不失真
+          vec3 toneMapped = acesFilm(col * 1.15);
 
-          // 四周午夜暗角，保留深邃负空间
-          float vignette = smoothstep(1.35, 0.45, length(st));
-          mapped *= vignette;
+          // 四周午夜暗角，留足静谧负空间
+          float vignette = smoothstep(1.35, 0.40, length(st));
+          toneMapped *= vignette;
 
-          gl_FragColor = vec4(mapped, 1.0);
+          gl_FragColor = vec4(toneMapped, 1.0);
         }
       `;
 
@@ -383,62 +365,71 @@
       const uMouseLoc = gl.getUniformLocation(program, 'u_mouse');
       const uPulseLoc = gl.getUniformLocation(program, 'u_pulse');
 
-      // 视口缩放与 DPR 控制
-      let width = 0;
-      let height = 0;
+      // 视口与多图层分辨率严格同步
+      let renderWidth = 0;
+      let renderHeight = 0;
       function resize() {
         const dpr = Math.min(window.devicePixelRatio || 1, 2.0);
-        width = Math.floor(window.innerWidth * dpr);
-        height = Math.floor(window.innerHeight * dpr);
+        const w = window.innerWidth;
+        const h = window.innerHeight;
+        renderWidth = Math.floor(w * dpr);
+        renderHeight = Math.floor(h * dpr);
 
-        if (bgCanvas.width !== width || bgCanvas.height !== height) {
-          bgCanvas.width = width;
-          bgCanvas.height = height;
-          gl.viewport(0, 0, width, height);
+        if (bgCanvas.width !== renderWidth || bgCanvas.height !== renderHeight) {
+          bgCanvas.width = renderWidth;
+          bgCanvas.height = renderHeight;
+          bgCanvas.style.width = w + 'px';
+          bgCanvas.style.height = h + 'px';
+          gl.viewport(0, 0, renderWidth, renderHeight);
 
-          ptCanvas.width = width;
-          ptCanvas.height = height;
+          ptCanvas.width = renderWidth;
+          ptCanvas.height = renderHeight;
+          ptCanvas.style.width = w + 'px';
+          ptCanvas.style.height = h + 'px';
+          ptCtx.setTransform(1, 0, 0, 1, 0, 0);
           ptCtx.scale(dpr, dpr);
         }
       }
       window.addEventListener('resize', resize, { passive: true });
       resize();
 
-      // ==================== 物理星尘粒子群 (Particle Embers) ====================
-      // 1200+ 颗引力回旋星尘火花，为深邃画面注入跳跃的物理实体质感
-      const PARTICLE_COUNT = 900;
+      // ==================== 少量细腻星尘与短暂流光 (Delicate Stardust Motes) ====================
+      // 减少数量，改用柔和细小的星尘微粒，沿弧形引力轨道缓缓向内回旋
+      const PARTICLE_COUNT = 240;
       const particles = [];
 
-      class DustParticle {
+      class StardustMote {
         constructor() {
           this.reset(true);
         }
 
         reset(initial = false) {
-          this.r = Math.random() * 0.45 + 0.18;
+          this.r = Math.random() * 0.46 + 0.18;
           this.theta = Math.random() * Math.PI * 2;
-          this.speed = (0.35 / (this.r + 0.1)) * (Math.random() * 0.4 + 0.8);
-          this.radialSpeed = -(Math.random() * 0.008 + 0.003); // 螺旋向内吸附
-          this.size = Math.random() * 1.8 + 0.6;
-          this.alpha = initial ? Math.random() * 0.7 : 0.0;
-          this.maxAlpha = Math.random() * 0.65 + 0.35;
+          this.angularSpeed = (0.22 / Math.sqrt(this.r + 0.08)) * (0.8 + Math.random() * 0.4);
+          this.radialSpeed = -(Math.random() * 0.005 + 0.002); // 优雅的向心螺旋
+          this.size = Math.random() * 1.1 + 0.6; // 细微尺寸 (0.6 ~ 1.7px)
+          this.alpha = initial ? Math.random() * 0.65 : 0.0;
+          this.maxAlpha = Math.random() * 0.55 + 0.25;
           this.fadeIn = true;
-          // 左侧倾向冰蓝，右侧倾向洋红
-          this.baseHue = Math.cos(this.theta) < 0 ? 195 + Math.random() * 30 : 325 + Math.random() * 35;
+          // 左侧柔和冰蓝，右侧玫瑰淡紫
+          this.baseHue = Math.cos(this.theta) < 0 ? 205 + Math.random() * 25 : 320 + Math.random() * 30;
+          this.prevX = 0;
+          this.prevY = 0;
         }
 
-        update() {
-          this.theta += this.speed * 0.02;
-          this.r += this.radialSpeed * 0.015;
+        update(w, h) {
+          this.theta += this.angularSpeed * 0.016;
+          this.r += this.radialSpeed * 0.016;
 
           if (this.fadeIn) {
-            this.alpha += 0.015;
+            this.alpha += 0.012;
             if (this.alpha >= this.maxAlpha) this.fadeIn = false;
           }
 
-          // 靠近黑洞边缘加剧蒸发吞噬
-          if (this.r < 0.12 || this.r > 0.75) {
-            this.alpha -= 0.025;
+          // 靠近黑洞边缘时平滑融入光环消失
+          if (this.r < 0.13 || this.r > 0.72) {
+            this.alpha -= 0.018;
             if (this.alpha <= 0) this.reset();
           }
         }
@@ -448,22 +439,37 @@
           const cy = h * 0.5;
           const scale = Math.min(w, h);
 
-          // 略带心形椭圆压缩的极坐标投射
           const px = cx + Math.cos(this.theta) * this.r * scale;
-          const py = cy + Math.sin(this.theta) * this.r * scale * 0.88 - 0.02 * scale;
+          const py = cy + Math.sin(this.theta) * this.r * scale * 0.88 - 0.015 * scale;
 
-          ctx.fillStyle = `hsla(${this.baseHue}, 100%, 78%, ${this.alpha})`;
+          if (this.prevX === 0) {
+            this.prevX = px;
+            this.prevY = py;
+          }
+
+          // 绘制微小星尘光点与柔和微光晕
+          ctx.strokeStyle = `hsla(${this.baseHue}, 85%, 82%, ${this.alpha * 0.6})`;
+          ctx.lineWidth = this.size;
           ctx.beginPath();
-          ctx.arc(px, py, this.size, 0, Math.PI * 2);
+          ctx.moveTo(this.prevX, this.prevY);
+          ctx.lineTo(px, py);
+          ctx.stroke();
+
+          ctx.fillStyle = `hsla(${this.baseHue}, 90%, 88%, ${this.alpha})`;
+          ctx.beginPath();
+          ctx.arc(px, py, this.size * 0.8, 0, Math.PI * 2);
           ctx.fill();
+
+          this.prevX = px;
+          this.prevY = py;
         }
       }
 
       for (let i = 0; i < PARTICLE_COUNT; i++) {
-        particles.push(new DustParticle());
+        particles.push(new StardustMote());
       }
 
-      // 交互
+      // 交互：平滑跟随
       let targetMouseX = 0.5;
       let targetMouseY = 0.5;
       let curMouseX = 0.5;
@@ -481,14 +487,12 @@
         }
       }, { passive: true });
 
-      // 宇宙呼吸脉冲
+      // 极为舒缓深邃的宇宙能量呼吸 (周期约 9.2 秒，平稳起伏，不突兀)
       function getPulse(t) {
-        const cycle = (t % 7.2) / 7.2;
-        if (cycle < 0.3) {
-          const p = cycle / 0.3;
-          return Math.sin(p * Math.PI) * Math.exp(-p * 1.5);
-        }
-        return 0.0;
+        const cycle = (t % 9.2) / 9.2;
+        // 平滑余弦能量舒张
+        const wave = 0.5 - 0.5 * Math.cos(cycle * Math.PI * 2.0);
+        return Math.pow(wave, 1.4);
       }
 
       // 主渲染帧循环
@@ -498,26 +502,26 @@
 
         const elapsed = (now - startTime) * 0.001;
 
-        curMouseX += (targetMouseX - curMouseX) * 0.05;
-        curMouseY += (targetMouseY - curMouseY) * 0.05;
+        curMouseX += (targetMouseX - curMouseX) * 0.04;
+        curMouseY += (targetMouseY - curMouseY) * 0.04;
 
         const pulse = getPulse(elapsed);
 
-        // 1. 绘制底层 WebGL 电影级黑洞星云与极光流带
+        // 1. 渲染 WebGL 深度黑洞星云与银蓝引力透镜光环
         gl.uniform2f(uResLoc, bgCanvas.width, bgCanvas.height);
         gl.uniform1f(uTimeLoc, elapsed);
         gl.uniform2f(uMouseLoc, curMouseX, curMouseY);
         gl.uniform1f(uPulseLoc, pulse);
         gl.drawArrays(gl.TRIANGLES, 0, 6);
 
-        // 2. 绘制上层引力星尘火花
-        const renderW = window.innerWidth;
-        const renderH = window.innerHeight;
-        ptCtx.clearRect(0, 0, renderW, renderH);
+        // 2. 渲染上层细腻弧形星尘
+        const w = window.innerWidth;
+        const h = window.innerHeight;
+        ptCtx.clearRect(0, 0, w, h);
 
         for (let i = 0; i < particles.length; i++) {
-          particles[i].update();
-          particles[i].draw(ptCtx, renderW, renderH);
+          particles[i].update(w, h);
+          particles[i].draw(ptCtx, w, h);
         }
       }
 
